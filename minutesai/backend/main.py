@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
-import anthropic
+from groq import Groq
 import websockets
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
@@ -23,14 +23,14 @@ app = FastAPI(title="MinutesAI API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 @app.get("/")
 async def root():
@@ -125,10 +125,10 @@ async def generate_minutes(request: dict):
     if not transcript:
         return {"error": "No transcript provided"}
     
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = Groq(api_key=GROQ_API_KEY)
     
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
+    message = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
         max_tokens=2000,
         messages=[{
             "role": "user",
@@ -159,17 +159,17 @@ Transcript:
     )
     
     try:
-        minutes = json.loads(message.content[0].text)
+        minutes = json.loads(message.choices[0].message.content)
         return minutes
     except:
-        return {"raw": message.content[0].text}
+        return {"raw": message.choices[0].message.content}
 
 @app.post("/api/export-pdf")
 async def export_pdf(request: dict):
     minutes = request.get("minutes", {})
     
     tmp = tempfile.NamedTemporaryFile(
-        delete=False, 
+        delete=False,
         suffix=".pdf"
     )
     
@@ -211,7 +211,7 @@ async def export_pdf(request: dict):
         story.append(Paragraph("Key Decisions", heading_style))
         for i, decision in enumerate(minutes["key_decisions"], 1):
             story.append(Paragraph(
-                f"{i}. {decision}", 
+                f"{i}. {decision}",
                 styles['Normal']
             ))
         story.append(Spacer(1, 12))
