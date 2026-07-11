@@ -74,14 +74,25 @@ function App() {
     try {
       const socket = await openSocket();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            sampleRate: 16000
+          },
+          video: true
+        });
+      
+      // Get audio track only
+      const audioTrack = stream.getAudioTracks()[0];
+      if (!audioTrack) throw new Error("No audio");
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, sampleRate: 16000 }
+        });
+      }
 
       streamRef.current = stream;
 
