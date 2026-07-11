@@ -132,9 +132,55 @@ async def generate_minutes(request: dict):
         max_tokens=2000,
         messages=[{
             "role": "user",
-            "content": f"""Analyze this meeting transcript and return ONLY a valid JSON object with no other text:
+            "content": f"""First detect the type of this transcript, then return ONLY a valid JSON object with no other text.
 
+Detection rules:
+- If transcript has instructor/teacher/professor explaining concepts = "lecture"
+- If transcript has presenter/host with audience Q&A = "webinar"  
+- If transcript has team discussion, decisions, tasks = "meeting"
+
+Return this JSON based on type:
+
+If type is "lecture":
 {{
+    "type": "lecture",
+    "meeting_title": "topic of the lecture",
+    "date": "today",
+    "duration": "estimated duration",
+    "subject": "subject or course name",
+    "instructor": "instructor name if mentioned",
+    "key_concepts": ["concept 1", "concept 2", "concept 3"],
+    "executive_summary": "3 sentences summarizing what was taught",
+    "important_points": ["point 1", "point 2", "point 3"],
+    "definitions": ["term: definition", "term: definition"],
+    "references": ["reference 1", "reference 2"],
+    "quiz_questions": ["question 1?", "question 2?", "question 3?"]
+}}
+
+If type is "webinar":
+{{
+    "type": "webinar",
+    "meeting_title": "webinar title",
+    "date": "today",
+    "duration": "estimated duration",
+    "speaker": "speaker name if mentioned",
+    "executive_summary": "3 sentences summarizing the webinar",
+    "main_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
+    "topics_covered": ["topic 1", "topic 2"],
+    "resources_shared": ["resource 1", "resource 2"],
+    "qa_summary": "summary of Q&A if any",
+    "action_items": [
+        {{
+            "task": "what to do after webinar",
+            "deadline": "TBD",
+            "priority": "high or medium or low"
+        }}
+    ]
+}}
+
+If type is "meeting":
+{{
+    "type": "meeting",
     "meeting_title": "generated title based on content",
     "date": "today",
     "duration": "estimated duration",
