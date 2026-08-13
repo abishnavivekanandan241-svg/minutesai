@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from "react";
 
 const BACKEND_URL = "http://localhost:8000";
@@ -20,6 +21,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentSpeakerNum, setCurrentSpeakerNum] = useState(1);
   const [hasVideo, setHasVideo] = useState(false);
+  const [participantsText, setParticipantsText] = useState("");
+  const participantsRef = useRef([]);
 
   const socketRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -163,13 +166,20 @@ function App() {
       const response = await fetch(`${BACKEND_URL}/api/detect-speaker-name`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frame: frameData, speaker_num: speakerNum }),
+        body: JSON.stringify({
+          frame: frameData,
+          speaker_num: speakerNum,
+          participants: participantsRef.current,
+        }),
       });
       const data = await response.json();
       console.log("OCR result:", data);
       if (data.name) {
         const pending = pendingNameRef.current[speakerNum];
-        if (pending === data.name) {
+        // Fuzzy match: compare lowercase first 6 chars, since OCR noise
+        // varies slightly between reads of the same real name.
+        const fuzzyKey = (s) => (s || "").toLowerCase().replace(/[^a-z]/g, "").slice(0, 6);
+        if (pending && fuzzyKey(pending) === fuzzyKey(data.name) && fuzzyKey(data.name).length >= 4) {
           // Same name seen twice in a row for this speaker — trust it now.
           // Locking on a SINGLE read is risky: the video frame can lag the
           // audio Deepgram used to decide "speaker changed," so one bad
@@ -262,6 +272,10 @@ function App() {
     setSpeakerNames({});
     setCurrentSpeakerNum(1);
     currentSpeakerNumRef.current = 1;
+    participantsRef.current = participantsText
+      .split("\n")
+      .map((n) => n.trim())
+      .filter(Boolean);
     try {
       const socket = await openSocket();
       let stream;
@@ -483,7 +497,19 @@ function App() {
                 <div style={{ color:"#B0B0C0", marginBottom:"20px" }}>Streaming to Deepgram...</div>
               </div>
             ) : (
-              <div style={{ color:"#B0B0C0", marginBottom:"20px" }}>Click to start recording</div>
+              <div style={{ marginBottom:"20px", textAlign:"left" }}>
+                <div style={{ color:"#B0B0C0", marginBottom:"10px", textAlign:"center" }}>Click to start recording</div>
+                <label style={{ display:"block", fontSize:"13px", color:"#B0B0C0", marginBottom:"6px" }}>
+                  Participant names (one per line) — helps identify speakers accurately
+                </label>
+                <textarea
+                  value={participantsText}
+                  onChange={(e) => setParticipantsText(e.target.value)}
+                  placeholder={"Bruce Robertson\nMatthew Wilson\nKen Morris"}
+                  rows={4}
+                  style={{ width:"100%", background:"#0F0F1A", border:"1px solid #2A2A3E", color:"white", borderRadius:"8px", padding:"10px", fontSize:"13px", resize:"vertical", boxSizing:"border-box" }}
+                />
+              </div>
             )}
             <button onClick={isRecording ? stopRecording : startRecording}
               style={{ width:"100%", padding:"14px", borderRadius:"8px", border:"none", cursor:"pointer", fontSize:"16px", fontWeight:"bold", background: isRecording ? "#FF4757" : "#6C63FF", color:"white" }}>

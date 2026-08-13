@@ -1,3 +1,4 @@
+
 import os
 import json
 import asyncio
@@ -5,6 +6,7 @@ import logging
 import base64
 import io
 import re
+import difflib
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -118,10 +120,33 @@ async def root():
     return {"message": "Welcome to MinutesAI API"}
 
 
+def match_against_participants(lines, participants):
+    """Fuzzy-match noisy OCR lines against a known participant list. This is
+    far more reliable than guessing blind: instead of parsing arbitrary
+    pixels into a name, we're picking the closest of a handful of KNOWN
+    names, which tolerates OCR noise (merged words, stray characters,
+    dropped letters) much better. Returns the best match above a
+    similarity cutoff, or None if nothing matches confidently enough."""
+    if not participants:
+        return None
+    best_name, best_score = None, 0.0
+    for line in lines:
+        cleaned = re.sub(r"[^A-Za-z ]", "", line).strip()
+        if len(cleaned) < 3:
+            continue
+        matches = difflib.get_close_matches(cleaned, participants, n=1, cutoff=0.55)
+        if matches:
+            score = difflib.SequenceMatcher(None, cleaned.lower(), matches[0].lower()).ratio()
+            if score > best_score:
+                best_score, best_name = score, matches[0]
+    return best_name
+
+
 @app.post("/api/detect-speaker-name")
 async def detect_speaker_name(request: dict):
     try:
         image_data = request.get("frame", "")
+        participants = [p.strip() for p in request.get("participants", []) if p.strip()]
         if not image_data:
             return {"name": None}
         img_bytes = base64.b64decode(image_data.split(",")[1])
@@ -138,7 +163,13 @@ async def detect_speaker_name(request: dict):
 
         text = pytesseract.image_to_string(gray, config="--psm 6")
         lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 1]
-        detected_name = guess_name_from_ocr_lines(lines)
+
+        # Prefer matching against the known participant list when one was
+        # provided — much more reliable than blind pattern guessing.
+        detected_name = match_against_participants(lines, participants)
+        if not detected_name:
+            detected_name = guess_name_from_ocr_lines(lines)
+
         logger.info(f"OCR lines: {lines} -> detected: {detected_name}")
         return {"name": detected_name, "all_text": lines}
     except Exception as e:
@@ -258,6 +289,17 @@ async def generate_minutes(request: dict):
             "role": "user",
             "content": f"""IMPORTANT: Always respond in ENGLISH only.
 
+The transcript below has speaker labels like "Name: text". Some labels are
+garbled OCR artifacts (e.g. "Day PGM Ser", single fragments, role titles
+like "Governance", "Manager"), not real people. When producing names,
+attendees, or task owners:
+- Only include labels that look like real human full names (e.g. "Bruce
+  Robertson", "Ken Morris").
+- Silently drop or merge anything that looks like noise, a role/department
+  title, or a duplicate/partial version of a name already included.
+- If genuinely unsure who said something, use "Unknown" rather than
+  including a garbled label.
+
 Analyze transcript. Detect type:
 - instructor explaining = "lecture"
 - presenter with Q&A = "webinar"
@@ -265,14 +307,63 @@ Analyze transcript. Detect type:
 
 Return ONLY valid JSON.
 
-If lecture:
-{{"type":"lecture","meeting_title":"topic","date":"today","duration":"est","subject":"subject","instructor":"name or Unknown","executive_summary":"4-5 sentences","key_concepts":["c1","c2","c3","c4","c5"],"important_points":["p1","p2","p3","p4","p5"],"definitions":["t1: def","t2: def"],"references":["r1","r2"],"quiz_questions":["q1?","q2?","q3?"]}}
+If type is "lecture":
+{{
+    "type": "lecture",
+    "meeting_title": "topic of the lecture",
+    "date": "today",
+    "duration": "estimated duration",
+    "subject": "subject or course name",
+    "instructor": "instructor name if mentioned",
+    "key_concepts": ["concept 1", "concept 2", "concept 3"],
+    "executive_summary": "3 sentences summarizing what was taught",
+    "important_points": ["point 1", "point 2", "point 3"],
+    "definitions": ["term: definition", "term: definition"],
+    "references": ["reference 1", "reference 2"],
+    "quiz_questions": ["question 1?", "question 2?", "question 3?"]
+}}
 
-If webinar:
-{{"type":"webinar","meeting_title":"title","date":"today","duration":"est","speaker":"name or Unknown","executive_summary":"4-5 sentences","main_takeaways":["t1","t2","t3","t4"],"topics_covered":["t1","t2","t3"],"resources_shared":["r1","r2"],"qa_summary":"summary","action_items":[{{"task":"task","deadline":"TBD","priority":"high/medium/low"}}]}}
+If type is "webinar":
+{{
+    "type": "webinar",
+    "meeting_title": "webinar title",
+    "date": "today",
+    "duration": "estimated duration",
+    "speaker": "speaker name if mentioned",
+    "executive_summary": "3 sentences summarizing the webinar",
+    "main_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
+    "topics_covered": ["topic 1", "topic 2"],
+    "resources_shared": ["resource 1", "resource 2"],
+    "qa_summary": "summary of Q&A if any",
+    "action_items": [
+        {{
+            "task": "what to do after webinar",
+            "deadline": "TBD",
+            "priority": "high or medium or low"
+        }}
+    ]
+}}
 
-If meeting:
-{{"type":"meeting","meeting_title":"title","date":"today","duration":"est","attendees":["n1","n2"],"executive_summary":"4-5 sentences","key_decisions":["d1","d2","d3"],"action_items":[{{"task":"task","owner":"person","deadline":"deadline or TBD","priority":"high/medium/low"}}],"topics_discussed":["t1","t2","t3"],"next_meeting":"details or null"}}
+If type is "meeting":
+{{
+    "type": "meeting",
+    "meeting_title": "generated title based on content",
+    "date": "today",
+    "duration": "estimated duration",
+    "attendees": ["name1", "name2"],
+    "executive_summary": "3 clear sentences summarizing the meeting",
+    "key_decisions": ["decision 1", "decision 2"],
+    "action_items": [
+        {{
+            "task": "what needs to be done",
+            "owner": "person responsible",
+            "deadline": "mentioned deadline or TBD",
+            "priority": "high or medium or low"
+        }}
+    ],
+    "topics_discussed": ["topic1", "topic2"],
+    "next_meeting": "next meeting info or null"
+}}
 
 Transcript:
 {transcript}"""
